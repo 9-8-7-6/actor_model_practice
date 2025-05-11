@@ -1,45 +1,43 @@
-use actor_model_practice::{Message, Order};
-use tokio::main;
-use tokio::sync::mpsc;
+// src/bin/server.rs
+use actor_model_practice::Message;
+use anyhow::Result;
+use serde_json::from_str;
+use tokio::{
+    io::{AsyncBufReadExt, BufReader},
+    net::TcpListener,
+    sync::mpsc,
+};
 
-/// Represents the server-side actor that processes incoming orders.
 pub struct OrderBookActor {
-    /// Channel to receive messages from clients.
-    pub receiver: mpsc::Receiver<Message>,
-    /// The total amount currently invested.
-    pub total_invested: f32,
-    /// The maximum allowed investment cap.
-    pub investment_cap: f32,
+    receiver: mpsc::Receiver<Message>,
+    total_invested: f32,
+    investment_cap: f32,
 }
 
 impl OrderBookActor {
-    /// Constructs a new OrderBookActor with a message receiver and investment cap.
-    fn new(receiver: mpsc::Receiver<Message>, investment_cap: f32) -> Self {
+    fn new(receiver: mpsc::Receiver<Message>, cap: f32) -> Self {
         Self {
             receiver,
             total_invested: 0.0,
-            investment_cap,
+            investment_cap: cap,
         }
     }
 
-    /// Handles a single incoming message, updates state, and sends back a response.
-    fn handle_message(&mut self, message: Message) {
-        if message.amount + self.total_invested >= self.investment_cap {
+    fn handle_message(&mut self, msg: Message) {
+        if self.total_invested + msg.amount > self.investment_cap {
             println!(
-                "rejecting purchase, total invested: {}",
-                self.total_invested
+                "→ REJECT {:?} {:.2}, total {:.2}",
+                msg.ticker, msg.amount, self.total_invested
             );
-            let _ = message.respond_to.send(0);
         } else {
-            self.total_invested += message.amount;
+            self.total_invested += msg.amount;
             println!(
-                "processing purchase, total invested: {}",
-                self.total_invested
+                "✔ ACCEPT {:?} {:.2}, total now {:.2}",
+                msg.ticker, msg.amount, self.total_invested
             );
-            let _ = message.respond_to.send(1);
         }
     }
-    /// Main actor loop that continuously receives and processes messages.
+
     async fn run(mut self) {
         while let Some(msg) = self.receiver.recv().await {
             self.handle_message(msg);
@@ -47,32 +45,29 @@ impl OrderBookActor {
     }
 }
 
-#[main]
-async fn main() {
-    // Create a channel for communication with clients.
-    let (tx, rx) = mpsc::channel::<Message>(32);
+#[tokio::main]
+async fn main() -> Result<()> {
+    let (tx, rx) = mpsc::channel(32);
+    tokio::spawn(async move { OrderBookActor::new(rx, 20.0).run().await });
 
-    /* for test client function
-    tokio::spawn(async move {
-        use tokio::sync::oneshot;
+    let listener = TcpListener::bind("127.0.0.1:12345").await?;
+    println!("Server listening on 127.0.0.1:12345");
 
-        for _ in 0..3 {
-            let (responder, receiver) = oneshot::channel();
-            let msg = Message {
-                order: Order::BUY,
-                ticker: "BYND".to_string(),
-                amount: 5.5,
-                respond_to: responder,
-            };
+    loop {
+        let (socket, _) = listener.accept().await?;
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let reader = BufReader::new(socket);
+            let mut lines = reader.lines();
 
-            let _ = tx.send(msg);
-            if let Ok(v) = receiver.await {
-                println!("Client got response: {}", v);
+            while let Ok(Some(line)) = lines.next_line().await {
+                match from_str::<Message>(&line) {
+                    Ok(msg) => {
+                        let _ = tx.send(msg).await;
+                    }
+                    Err(e) => eprintln!("bad json: {}", e),
+                }
             }
-        }
-    });
-    */
-
-    let actor = OrderBookActor::new(rx, 20.0);
-    actor.run().await;
+        });
+    }
 }

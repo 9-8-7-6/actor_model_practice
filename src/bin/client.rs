@@ -1,30 +1,22 @@
+// src/bin/client.rs
 use actor_model_practice::{Message, Order};
-use tokio::main;
-use tokio::sync::{mpsc::Sender, oneshot};
+use anyhow::Result;
+use serde_json::to_string;
+use tokio::{io::AsyncWriteExt, net::TcpStream};
 
-/// Sends a BUY order to the actor via the given sender channel.
-async fn send_order(sender: Sender<Message>, amount: f32, ticker: &str) {
-    let (responder, receiver) = oneshot::channel();
+#[tokio::main]
+async fn main() -> Result<()> {
+    let mut stream = TcpStream::connect("127.0.0.1:12345").await?;
     let msg = Message {
         order: Order::BUY,
-        ticker: ticker.to_string(),
-        amount,
-        respond_to: responder,
+        ticker: "AAPL".into(),
+        amount: 7.0,
     };
 
-    let _ = sender.send(msg).await;
+    let json = to_string(&msg)?;
+    stream.write_all(json.as_bytes()).await?;
+    stream.write_all(b"\n").await?;
+    println!("Sent order: {:?}", msg);
 
-    match receiver.await {
-        Ok(result) => println!("Order result for {}: {}", ticker, result),
-        Err(e) => eprintln!("Failed to receive response: {}", e),
-    }
-}
-
-#[main]
-async fn main() {
-    let (tx, _rx) = tokio::sync::mpsc::channel::<Message>(32);
-
-    for t in ["TSLA", "AAPL", "PLTR"] {
-        send_order(tx.clone(), 7.0, t).await;
-    }
+    Ok(())
 }
