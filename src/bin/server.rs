@@ -1,15 +1,19 @@
 use actor_model_practice::{Message, Order};
-use tokio::io::unix::AsyncFd;
 use tokio::main;
 use tokio::sync::mpsc;
 
+/// Represents the server-side actor that processes incoming orders.
 pub struct OrderBookActor {
+    /// Channel to receive messages from clients.
     pub receiver: mpsc::Receiver<Message>,
+    /// The total amount currently invested.
     pub total_invested: f32,
+    /// The maximum allowed investment cap.
     pub investment_cap: f32,
 }
 
 impl OrderBookActor {
+    /// Constructs a new OrderBookActor with a message receiver and investment cap.
     fn new(receiver: mpsc::Receiver<Message>, investment_cap: f32) -> Self {
         Self {
             receiver,
@@ -18,6 +22,7 @@ impl OrderBookActor {
         }
     }
 
+    /// Handles a single incoming message, updates state, and sends back a response.
     fn handle_message(&mut self, message: Message) {
         if message.amount + self.total_invested >= self.investment_cap {
             println!(
@@ -34,6 +39,7 @@ impl OrderBookActor {
             let _ = message.respond_to.send(1);
         }
     }
+    /// Main actor loop that continuously receives and processes messages.
     async fn run(mut self) {
         while let Some(msg) = self.receiver.recv().await {
             self.handle_message(msg);
@@ -43,6 +49,7 @@ impl OrderBookActor {
 
 #[main]
 async fn main() {
+    // Create a channel for communication with clients.
     let (tx, rx) = mpsc::channel::<Message>(32);
 
     /* for test client function
